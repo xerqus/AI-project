@@ -54,6 +54,7 @@ jobs:
       - name: Ensure gradlew has Executable Permissions
         run: |
           cd android
+          gradle wrapper
           chmod +x gradlew
 
       - name: Build Android APK via Gradle
