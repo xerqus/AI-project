@@ -5,9 +5,6 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build:
     name: Build Android APK
@@ -44,7 +41,11 @@ jobs:
 
       - name: Add Android & Sync Capacitor
         run: |
-          npx cap add android
+          if [ ! -d "android" ]; then
+            npx cap add android
+          else
+            echo "Android directory already exists, skipping 'cap add'"
+          fi
           npx cap sync android
 
       - name: Ensure gradlew has Executable Permissions
