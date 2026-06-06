@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     name: Build Android APK
@@ -40,6 +43,11 @@ jobs:
         run: |
           npx cap add android
           npx cap sync android
+
+      - name: Ensure gradlew has Executable Permissions
+        run: |
+          cd android
+          chmod +x gradlew
 
       - name: Build Android APK via Gradle
         run: |
