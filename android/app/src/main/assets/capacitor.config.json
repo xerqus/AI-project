@@ -1,0 +1,8 @@
+{
+	"appId": "com.optionplus.invoice",
+	"appName": "Option Plus Invoice",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https"
+	}
+}
