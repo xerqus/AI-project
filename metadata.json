@@ -1,0 +1,8 @@
+{
+  "name": "Remix: Option Plus Invoice Generator v2 ",
+  "description": "نرم‌افزار صدور و ویرایش فاکتور خودرویی آپشن پلاس با قابلیت شخصی‌سازی فیلدها و پیش‌نمایش زنده",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
