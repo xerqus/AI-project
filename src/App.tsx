@@ -1,81 +1,26 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
+import html2pdf from 'html2pdf.js';
 import { 
   Plus, 
   Trash2, 
   Printer, 
-  RotateCcw, 
   Check,
-  CheckCircle2
+  CheckCircle2,
+  FileText,
+  Settings as SettingsIcon,
+  List as ListIcon,
+  Save,
+  Edit as EditIcon
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-
-// Payment methods consistent with model types
-type PaymentMethod = 'POS' | 'CASH' | 'BANK_TRANSFER' | 'OTHER';
-
-interface PaymentMethodDetail {
-  id: PaymentMethod;
-  label: string;
-}
-
-const PAYMENT_METHODS: PaymentMethodDetail[] = [
-  { id: 'POS', label: 'کارتخوان' },
-  { id: 'BANK_TRANSFER', label: 'انتقال بانکی' },
-  { id: 'CASH', label: 'نقدی' },
-  { id: 'OTHER', label: 'سایر' }
-];
-
-interface InvoiceItem {
-  id: string;
-  description: string;
-  quantity: number;
-  unitPriceUsd: number;
-  unitPriceAed: number;
-}
-
-interface LicencePlate {
-  part1: string;
-  letter: string;
-  part2: string;
-  cityCode: string;
-}
-
-interface InvoiceState {
-  invoiceNo: string;
-  date: string;
-  time: string;
-  contactNo: string;
-  managerName: string;
-  
-  // Customer Info
-  customerName: string;
-  customerPhone: string;
-  customerAddress: string;
-  
-  // Car Info
-  carModel: string;
-  carYear: string;
-  carColor: string;
-  licencePlate: LicencePlate;
-  carVin: string;
-  carMileage: string;
-  
-  // Invoice Items
-  items: InvoiceItem[];
-  
-  // Financials
-  discountUsd: number;
-  discountAed: number;
-  vatRatePercent: number;
-  
-  // Notes
-  notes: string;
-  
-  // Payment Method
-  paymentMethod: PaymentMethod;
-  
-  // Signature Toggle
-  isSignedDummy: boolean;
-}
+import { InvoiceState, InvoiceItem, AppSettings, PAYMENT_METHODS } from './types';
+import { getInvoices, saveInvoice, deleteInvoice, getSettings, saveSettings, applyThemeColor, getCustomerSuggestions, getItemSuggestions } from './lib/storage';
+import { toPersianDigits, formatPersianCurrency } from './lib/utils';
+import InvoiceList from './components/InvoiceList';
+import Settings from './components/Settings';
 
 // Letter list for Iranian license plate selection
 const PLATE_LETTERS = [
@@ -83,21 +28,10 @@ const PLATE_LETTERS = [
 ];
 
 // Pure Persian Digit conversion helper matching Kotlin String.toPersianDigits()
-export function toPersianDigits(str: string | number): string {
-  const farsiDigits = ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"];
-  return String(str).replace(/[0-9]/g, (w) => farsiDigits[parseInt(w)]);
-}
-
-// Persian formatted currency helper matching Kotlin Double.toPersianDouble()
-export function formatPersianCurrency(amount: number): string {
-  const formatted = new Intl.NumberFormat('en-US', { 
-    maximumFractionDigits: 0,
-    minimumFractionDigits: 0
-  }).format(amount);
-  return toPersianDigits(formatted);
-}
+// Moved to lib/utils.ts
 
 const DEFAULT_STATE: InvoiceState = {
+  id: `inv-${Date.now()}`,
   invoiceNo: "۱۴۰۵/۴۰۰۲۱",
   date: "۱۴۰۵/۰۳/۱۰",
   time: "۱۹:۳۰",
@@ -144,8 +78,10 @@ const DEFAULT_STATE: InvoiceState = {
 };
 
 export default function App() {
-  const [state, setState] = useState<InvoiceState>({ ...DEFAULT_STATE });
-  const [activeTab, setActiveTab] = useState<'editor' | 'preview'>('editor');
+  const [state, setState] = useState<InvoiceState>({ ...DEFAULT_STATE, id: `inv-${Date.now()}` });
+  const [activeTab, setActiveTab] = useState<'list' | 'editor' | 'preview' | 'settings'>('list');
+  const [invoices, setInvoices] = useState<InvoiceState[]>([]);
+  const [appSettings, setAppSettings] = useState<AppSettings>(getSettings());
   
   // Dialog to Add Custom Row
   const [showAddRow, setShowAddRow] = useState(false);
@@ -160,6 +96,43 @@ export default function App() {
   const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
 
   // Auto calculate USD -> AED if one of them changes during add modal
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = () => {
+    setInvoices(getInvoices());
+    const settings = getSettings();
+    setAppSettings(settings);
+    applyThemeColor(settings.themeColor);
+  };
+
+  const handleSaveInvoice = () => {
+    saveInvoice(state);
+    setInvoices(getInvoices());
+    alert('فاکتور با موفقیت ذخیره شد.');
+  };
+
+  const handleEditInvoice = (invoice: InvoiceState) => {
+    setState(invoice);
+    setActiveTab('editor');
+  };
+
+  const handleDeleteInvoice = (id: string) => {
+    if (window.confirm('آیا از حذف این فاکتور اطمینان دارید؟')) {
+      deleteInvoice(id);
+      setInvoices(getInvoices());
+      if (state.id === id) {
+         handleReset();
+      }
+    }
+  };
+
+  const updateSettings = (newSettings: AppSettings) => {
+    setAppSettings(newSettings);
+    saveSettings(newSettings);
+    applyThemeColor(newSettings.themeColor);
+  };
   const handleUsdPriceChange = (usdVal: string) => {
     setNewPriceUsd(usdVal);
     const numeric = parseFloat(usdVal);
@@ -307,23 +280,85 @@ export default function App() {
     }));
   };
 
-  // Trigger Native browser Print Dialog
-  const handlePrint = () => {
+  // Trigger PDF Generation and Download / Native Share Dialog
+  const handlePrint = async () => {
+    if (activeTab === 'editor' && window.innerWidth < 768) {
+      setActiveTab('preview');
+      setTimeout(() => {
+        handlePrint();
+      }, 500); // give time for react rendering
+      return;
+    }
+
     // Elegant success confetti effect
     confetti({
       particleCount: 100,
       spread: 70,
       origin: { y: 0.6 }
     });
-    setTimeout(() => {
-      window.print();
+    
+    setTimeout(async () => {
+      try {
+        const element = document.getElementById('invoice-preview-container');
+        if (!element) {
+          window.print();
+          return;
+        }
+
+        // Temporarily clear any scaled transform applied by Tailwind
+        const originalClasses = element.className;
+        element.className = element.className.replace(/scale-\[0\.43\]/g, '').replace(/md:scale-100/g, '');
+
+        const opt = {
+          margin:       [5, 5, 5, 5] as [number, number, number, number],
+          filename:     `invoice-${state.invoiceNo || 'output'}.pdf`,
+          image:        { type: 'jpeg' as const, quality: 0.98 },
+          html2canvas:  { scale: 2, useCORS: true, windowWidth: 800 },
+          jsPDF:        { unit: 'mm' as const, format: 'a4' as const, orientation: 'portrait' as const }
+        };
+
+        if (Capacitor.isNativePlatform()) {
+          // Generate PDF as base64 string
+          const pdfBase64 = await html2pdf().set(opt).from(element).outputPdf('datauristring');
+          const base64Data = pdfBase64.split(',')[1];
+          
+          // Restore original styled scaling
+          element.className = originalClasses;
+
+          // Save to filesystem
+          const savedFile = await Filesystem.writeFile({
+            path: opt.filename,
+            data: base64Data,
+            directory: Directory.Cache 
+          });
+          
+          // Share / Open the file
+          await Share.share({
+            title: 'فاکتور آپشن پلاس',
+            url: savedFile.uri,
+            dialogTitle: 'اشتراک‌گذاری فاکتور'
+          });
+          
+        } else {
+          // On web, save the PDF to the user's device
+          await html2pdf().set(opt).from(element).save();
+          
+          // Restore original styled scaling
+          element.className = originalClasses;
+        }
+      } catch (e) {
+        console.error('Error generating PDF:', e);
+        // Fallback
+        window.print();
+      }
     }, 400);
   };
 
   const handleReset = () => {
-    if (window.confirm("آیا مایل به پاکسازی فاکتور هستید؟")) {
+    if (window.confirm("آیا مایل به ایجاد فاکتور جدید هستید؟")) {
       setState({
         ...DEFAULT_STATE,
+        id: `inv-${Date.now()}`,
         items: []
       });
       clearSignature();
@@ -352,58 +387,109 @@ export default function App() {
           {/* Quick Actions & Desktop view print buttons (RTL order - Left aligned in RTL) */}
           <div className="flex items-center gap-2">
             <button
+              onClick={handleSaveInvoice}
+              className="bg-green-600 hover:bg-green-700 text-white font-bold text-xs sm:text-sm px-4 py-2 rounded-lg transition-all shadow-lg flex items-center gap-2"
+            >
+              <Save size={16} />
+              <span className="hidden sm:inline">ذخیره فاکتور</span>
+            </button>
+
+            <button
               id="btn-print"
               onClick={handlePrint}
-              className="bg-brand-primary hover:bg-blue-700 text-white font-bold text-xs sm:text-sm px-4 py-2 rounded-lg transition-all shadow-lg shadow-blue-100 duration-200 flex items-center gap-2"
+              className="bg-brand-primary hover:bg-brand-dark text-white font-bold text-xs sm:text-sm px-4 py-2 rounded-lg transition-all shadow-lg flex items-center gap-2"
             >
               <Printer size={16} />
-              <span>خروجی PDF / چاپ فاکتور</span>
+              <span className="hidden sm:inline">خروجی PDF</span>
             </button>
             
             <button
               id="btn-reset"
               onClick={handleReset}
-              className="border border-slate-300 hover:bg-slate-50 text-slate-600 font-semibold text-xs sm:text-sm px-3 py-2 rounded-lg transition-all duration-200 flex items-center gap-1.5"
-              title="پاکسازی صورت‌حساب"
+              className="border border-slate-300 hover:bg-slate-50 text-slate-600 font-semibold text-xs sm:text-sm px-3 py-2 rounded-lg transition-all flex items-center gap-1.5"
+              title="فاکتور جدید"
             >
-              <RotateCcw size={15} />
-              <span className="hidden sm:inline">پاکسازی</span>
+              <Plus size={15} />
+              <span className="hidden sm:inline">جدید</span>
             </button>
           </div>
-          
         </div>
 
-        {/* Tab Selection for Responsive Mobile Viewports */}
-        <div className="flex border-t border-slate-100 md:hidden bg-white">
+        {/* Tab Selection */}
+        <div className="flex border-t border-slate-100 bg-white shadow overflow-x-auto no-scrollbar">
           <button
-            onClick={() => setActiveTab('editor')}
-            className={`flex-1 py-3 text-center text-xs font-bold transition-all duration-200 border-b-2 ${
-              activeTab === 'editor' 
+            onClick={() => setActiveTab('list')}
+            className={`flex-1 min-w-[100px] py-3 text-center text-xs font-bold transition-all border-b-2 flex justify-center items-center gap-2 ${
+              activeTab === 'list' 
                 ? 'border-brand-primary text-brand-primary bg-blue-50/30' 
-                : 'border-transparent text-slate-500'
+                : 'border-transparent text-slate-500 hover:bg-slate-50'
             }`}
           >
-            تنظیمات فاکتور
+            <ListIcon size={16}/>
+            لیست فاکتورها
+          </button>
+          <button
+            onClick={() => setActiveTab('editor')}
+            className={`flex-1 min-w-[100px] py-3 text-center text-xs font-bold transition-all border-b-2 flex justify-center items-center gap-2 ${
+              activeTab === 'editor' 
+                ? 'border-brand-primary text-brand-primary bg-blue-50/30' 
+                : 'border-transparent text-slate-500 hover:bg-slate-50'
+            }`}
+          >
+            <EditIcon size={16}/>
+            ویرایش فاکتور
           </button>
           <button
             onClick={() => setActiveTab('preview')}
-            className={`flex-1 py-3 text-center text-xs font-bold transition-all duration-200 border-b-2 ${
+            className={`flex-1 min-w-[100px] py-3 text-center text-xs font-bold transition-all border-b-2 flex justify-center items-center gap-2 ${
               activeTab === 'preview' 
                 ? 'border-brand-primary text-brand-primary bg-blue-50/30' 
-                : 'border-transparent text-slate-500'
+                : 'border-transparent text-slate-500 hover:bg-slate-50'
             }`}
           >
-            پیش‌نمایش فاکتور
+            <FileText size={16}/>
+            پیش‌نمایش
+          </button>
+          <button
+            onClick={() => setActiveTab('settings')}
+            className={`flex-1 min-w-[100px] py-3 text-center text-xs font-bold transition-all border-b-2 flex justify-center items-center gap-2 ${
+              activeTab === 'settings' 
+                ? 'border-brand-primary text-brand-primary bg-blue-50/30' 
+                : 'border-transparent text-slate-500 hover:bg-slate-50'
+            }`}
+          >
+            <SettingsIcon size={16}/>
+            تنظیمات
           </button>
         </div>
       </header>
 
       {/* 2. Main Content Body Wrap */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
-        
-        {/* Editor Form Columns (Visible on Desktop OR when activeTab is 'editor' on mobile) */}
-        <section className={`md:col-span-6 space-y-6 no-print ${activeTab === 'preview' ? 'hidden md:block' : 'block'}`}>
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 md:p-6 shadow-sm space-y-6">
+      <main className="flex-1 w-full mx-auto pb-24 relative bg-slate-100 flex justify-center items-start">
+        <div className={`w-full ${activeTab === 'preview' ? 'max-w-4xl p-2 sm:p-4' : 'max-w-md p-4 sm:p-0 sm:border-x sm:border-slate-300 min-h-screen shadow-xl bg-slate-50'}`}>
+        {/* List View */}
+        <section className={`w-full ${activeTab === 'list' ? 'block' : 'hidden'}`}>
+          <div className="pt-2">
+            <InvoiceList invoices={invoices} onEdit={handleEditInvoice} onDelete={handleDeleteInvoice} />
+          </div>
+        </section>
+
+        {/* Settings View */}
+        <section className={`w-full ${activeTab === 'settings' ? 'block' : 'hidden'}`}>
+          <div className="pt-2">
+            <Settings settings={appSettings} onSettingsChange={updateSettings} onReloadRequested={loadData} />
+          </div>
+        </section>
+
+        {/* Editor Form Columns */}
+        <section className={`w-full space-y-6 no-print ${activeTab === 'editor' ? 'block' : 'hidden'}`}>
+          <div className="bg-white sm:rounded-2xl border-y sm:border border-slate-200 p-5 md:p-6 shadow-sm space-y-6">
+            
+            <datalist id="customer-names">
+              {getCustomerSuggestions().map(cust => (
+                 <option key={cust.name} value={cust.name} />
+              ))}
+            </datalist>
             
             <div className="border-b border-slate-100 pb-4">
               <h2 className="text-base font-extrabold text-slate-900">تنظیمات اصلی فاکتور فروش</h2>
@@ -463,8 +549,17 @@ export default function App() {
                   <label className="text-[10px] sm:text-xs font-semibold text-slate-600 block mb-1 font-sans">نام و نام خانوادگی خریدار</label>
                   <input
                     type="text"
+                    list="customer-names"
                     value={state.customerName}
-                    onChange={(e) => setState({ ...state, customerName: e.target.value })}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      const match = getCustomerSuggestions().find(c => c.name === val);
+                      if (match) {
+                        setState({ ...state, customerName: val, customerPhone: match.phone, customerAddress: match.address });
+                      } else {
+                        setState({ ...state, customerName: val });
+                      }
+                    }}
                     className="w-full text-right p-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-brand-primary bg-white"
                   />
                 </div>
@@ -779,15 +874,17 @@ export default function App() {
           </div>
         </section>
 
-        {/* Live Premium Preview Panel (Visible on Desktop OR when activeTab is 'preview' on mobile) */}
-        <section className={`md:col-span-6 flex flex-col items-center print-full-width ${activeTab === 'editor' ? 'hidden md:block' : 'block'}`}>
-          <div className="bg-white border md:border-2 border-slate-400 p-6 md:p-8 rounded-lg shadow-xl print-full-width text-slate-900 w-full max-w-[850px] relative font-sans leading-relaxed">
+        {/* Live Premium Preview Panel */}
+        <section className={`w-full print-full-width ${activeTab === 'preview' ? 'block' : 'hidden'}`}>
+          <div className="w-full overflow-x-auto overflow-y-hidden no-scrollbar pb-12 flex justify-start md:justify-center px-4 md:px-0">
+          <div style={{ minWidth: "800px", maxWidth: "800px", width: "800px" }} id="invoice-preview-container" className="bg-white border-2 border-slate-400 p-8 rounded-lg shadow-2xl text-slate-900 mx-auto relative font-sans leading-relaxed shrink-0 scale-[0.43] md:scale-100 origin-top-right md:origin-center bg-zinc-50 border-double">
+
             
             {/* Header Block: Winged Symmetrical Brand Logo and Info */}
-            <div className="flex flex-col sm:flex-row border border-slate-300 bg-[#FAF9F6] rounded-md p-4 justify-between items-center gap-4">
+            <div className="flex flex-col  border border-slate-300 bg-[#FAF9F6] rounded-md p-4 justify-between items-center gap-4">
               
               {/* Left Column: Client metadata and General properties in RTL layout */}
-              <div className="text-right text-[11px] sm:text-xs text-slate-700 space-y-1 w-full sm:w-auto">
+              <div className="text-right text-[11px]  text-slate-700 space-y-1 w-full ">
                 <div>
                   <span className="text-slate-400 font-medium">شماره فاکتور:</span>{' '}
                   <span className="font-extrabold text-slate-900">{state.invoiceNo}</span>
@@ -804,22 +901,22 @@ export default function App() {
 
               {/* Center: Winged Logo Badge with Dual English-Persian headers */}
               <div className="text-center flex flex-col items-center">
-                {/* SVG Symmetrical Wing Graphic */}
-                <svg className="w-16 h-8 text-brand-accent transform hover:scale-105 transition-transform duration-300" viewBox="0 0 100 40" fill="currentColor">
-                  {/* Left Symmetrical red wing */}
-                  <path d="M 50,34 L 20,6 L 5,6 L 45,38 Z" fill="#dc2626" />
-                  {/* Right Symmetrical red wing */}
-                  <path d="M 50,34 L 80,6 L 95,6 L 55,38 Z" fill="#dc2626" />
-                  {/* Dark navy visual chevron */}
-                  <path d="M 50,14 L 35,2 L 65,2 Z" fill="#1e293b" />
-                </svg>
+                {appSettings.logoBase64 ? (
+                  <img src={appSettings.logoBase64} alt="Company Logo" className="w-16 max-h-16 object-contain" />
+                ) : (
+                  <svg className="w-16 h-8 text-brand-accent transform hover:scale-105 transition-transform duration-300" viewBox="0 0 100 40" fill="currentColor">
+                    <path d="M 50,34 L 20,6 L 5,6 L 45,38 Z" fill="#dc2626" />
+                    <path d="M 50,34 L 80,6 L 95,6 L 55,38 Z" fill="#dc2626" />
+                    <path d="M 50,14 L 35,2 L 65,2 Z" fill="#1e293b" />
+                  </svg>
+                )}
                 <span className="font-mono text-sm font-black tracking-wider text-slate-900 mt-1 block">OPTION PLUS</span>
                 <span className="text-xs font-black text-slate-900 leading-none">آپشن پلاس</span>
                 <span className="text-[8px] text-slate-500 font-bold block mt-1 tracking-tight">نصب آپشن‌های فابـریک خودروهای آلـمانی</span>
               </div>
 
               {/* Right: Contact properties */}
-              <div className="text-right sm:text-left text-[11px] sm:text-xs text-slate-700 space-y-1 w-full sm:w-auto flex flex-col items-end">
+              <div className="text-right  text-[11px]  text-slate-700 space-y-1 w-full  flex flex-col items-end">
                 <div>
                   <span className="text-slate-400 font-medium">مدیر مجموعه:</span>{' '}
                   <span className="font-extrabold text-slate-900">{state.managerName}</span>
@@ -884,9 +981,9 @@ export default function App() {
 
                       {/* Regular Number blocks inside plate context */}
                       <div className="flex-1 flex items-center justify-center gap-1 px-1 font-sans">
-                        <span className="text-xs sm:text-sm font-extrabold text-slate-900">{toPersianDigits(state.licencePlate.part1)}</span>
+                        <span className="text-xs  font-extrabold text-slate-900">{toPersianDigits(state.licencePlate.part1)}</span>
                         <span className="text-[10px] font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">{state.licencePlate.letter}</span>
-                        <span className="text-xs sm:text-sm font-extrabold text-slate-900 leading-none">{toPersianDigits(state.licencePlate.part2)}</span>
+                        <span className="text-xs  font-extrabold text-slate-900 leading-none">{toPersianDigits(state.licencePlate.part2)}</span>
                       </div>
 
                       {/* Vertical line and right city code blocks */}
@@ -991,10 +1088,10 @@ export default function App() {
             </div>
 
             {/* Split Financial Calculator and Notes Block */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4 items-start">
+            <div className="grid grid-cols-1  gap-4 mt-4 items-start">
               
               {/* Financial calculations table (Left) */}
-              <div className="border border-slate-900 rounded bg-white overflow-hidden text-[10px] sm:text-xs">
+              <div className="border border-slate-900 rounded bg-white overflow-hidden text-[10px] ">
                 
                 {/* Total Item cost */}
                 <div className="flex justify-between items-center px-3 py-1.5 border-b border-slate-200">
@@ -1125,7 +1222,7 @@ export default function App() {
             </div>
 
             {/* Standard preprinted Terms & Conditions bulletins */}
-            <div className="border border-slate-300 bg-[#FAF9F6] rounded-lg p-3 text-[8px] sm:text-[9px] text-slate-500 space-y-1.5 mt-4 text-right">
+            <div className="border border-slate-300 bg-[#FAF9F6] rounded-lg p-3 text-[8px]  text-slate-500 space-y-1.5 mt-4 text-right">
               <span className="font-extrabold text-slate-800 block">شروط فرعی و مقررات ضمانت خدماتی فنی:</span>
               <div className="space-y-1 pr-1 font-sans font-medium leading-relaxed">
                 <p>۱. کلیه قطعات و برندهای ارائه شده اصیل بوده و دارای ضمانت تطابق فابریک خودروی پذیرش شده هستند.</p>
@@ -1136,18 +1233,24 @@ export default function App() {
             </div>
 
             {/* Footer car manufacturers logo inline block representation */}
-            <div className="mt-5 text-center text-[7px] sm:text-[8px] font-black text-slate-300 tracking-widest leading-none no-print">
+            <div className="mt-5 text-center text-[7px]  font-black text-slate-300 tracking-widest leading-none no-print">
               PORSCHE  •  MERCEDES-BENZ  •  BMW  •  AUDI  •  VOLKSWAGEN
             </div>
 
           </div>
+          </div>
         </section>
-
+        </div>
       </main>
 
       {/* 3. Add Custom Service Items Modal dialog */}
       {showAddRow && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 no-print animate-fade-in">
+          <datalist id="item-descs">
+             {getItemSuggestions().map(item => (
+                <option key={item.description} value={item.description} />
+             ))}
+          </datalist>
           <div className="bg-white rounded-2xl w-full max-w-md p-6 border border-slate-200 shadow-2xl text-right">
             
             <HeaderModalTitle onClose={() => setShowAddRow(false)} />
@@ -1159,8 +1262,17 @@ export default function App() {
                 <input
                   type="text"
                   required
+                  list="item-descs"
                   value={newDesc}
-                  onChange={(e) => setNewDesc(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    const match = getItemSuggestions().find(i => i.description === val);
+                    setNewDesc(val);
+                    if (match) {
+                      setNewPriceUsd(match.unitPriceUsd.toString());
+                      setNewPriceAed(match.unitPriceAed.toString());
+                    }
+                  }}
                   className="w-full text-right p-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-brand-primary"
                   placeholder="مثال: کلید دکمه‌ای کیت فایبر اگزوز"
                 />

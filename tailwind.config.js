@@ -10,7 +10,7 @@ export default {
         brand: {
           bg: '#f1f5f9',
           card: '#ffffff',
-          primary: '#2563eb', // vibrant brand blue
+          primary: 'var(--brand-primary, #2563eb)', // vibrant brand blue
           accent: '#dc2626', // secondary red highlights
           dark: '#1e293b', // charcoal navy headers
         }
